@@ -249,8 +249,8 @@ fn main() {
                 let eh_dia_util = is_dia_util(hoje, &feriados);
 
                 println!(
-                    "[runner] Checando: frequência={} ∈ {}..{}, dia útil?={}, feriado={}",
-                    hora, intervalo_inicio, intervalo_fim, eh_dia_util, !eh_dia_util
+                    "[runner] Checando: hora={} ∈ {}..{}, dia útil?={}, feriado={}, frequência={} min",
+                    hora, intervalo_inicio, intervalo_fim, eh_dia_util, !eh_dia_util, frequencia
                 );
 
                 if dentro_da_janela && eh_dia_util {
