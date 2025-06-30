@@ -18,7 +18,7 @@ struct FeriadosConfig {
 	feriados: Vec<String>,
 }
 
-/// Configuração de códigos lida de um arquivo YAML `acoes.yaml` ou `fundos.yaml`
+/// Configuração de códigos lidos de um arquivo YAML `acoes.yaml` ou `fundos.yaml`
 #[derive(Serialize, Deserialize)]
 struct CodigosConfig {
 	codes: Vec<String>,
@@ -42,16 +42,14 @@ fn salvar_lista_de_ativos(_tipo: TipoAtivo, caminho: &PathBuf, padrao: &[&str]) 
 
 /// Carrega os códigos de ativos a partir de um arquivo YAML conforme o tipo.
 /// Cria o arquivo com padrão caso não exista.
+// TODO: Criar uma única função ou macro que carrege os arquivos de ativos e também de feriados.
 fn carregar_ativos(tipo: TipoAtivo) -> Vec<String> {
 	let (nome_arquivo, padrao): (&str, &[&str]) = match tipo {
 		TipoAtivo::Acao => (
-			"/var/lib/radar-runner/acoes.yaml",
+			"acoes.yaml",
 			&["VALE3", "PRIO3", "BRAV3", "KLBN11", "ITSA4"],
 		),
-		TipoAtivo::Fundo => (
-			"/var/lib/radar-runner/fundos.yaml",
-			&["SNEL11", "AFHI11", "RELG11", "VGIR11"],
-		),
+		TipoAtivo::Fundo => ("fundos.yaml", &["SNEL11", "AFHI11", "RELG11", "VGIR11"]),
 	};
 
 	let caminho = PathBuf::from(nome_arquivo);
@@ -70,11 +68,13 @@ fn carregar_ativos(tipo: TipoAtivo) -> Vec<String> {
 		);
 	}
 
-	// Fallback
+	// Caso não o arquivo não seja carregado do disco, retorna os ativos padrão
+	// definidos acima.
 	padrao.iter().map(|s| s.to_string()).collect()
 }
 
 /// Carrega os feriados a partir de um arquivo YAML localizado no diretório de trabalho do aplicativo
+// TODO: Criar uma única função ou macro que carrege os arquivos de ativos e também de feriados.
 fn carregar_feriados_yaml() -> Vec<String> {
 	let caminho = PathBuf::from("feriados.yaml");
 	if let Ok(mut arquivo) = File::open(&caminho) {
@@ -90,13 +90,14 @@ fn carregar_feriados_yaml() -> Vec<String> {
 }
 
 /// Verifica se a data é dia útil (Segunda a Sexta) e não está em feriados
-fn is_dia_util(data: NaiveDate, feriados: &[String]) -> bool {
+fn e_dia_util(data: NaiveDate, feriados: &[String]) -> bool {
 	let dia_semana = data.weekday().number_from_monday();
 	let data_str = data.format("%Y-%m-%d").to_string();
 	(1..=5).contains(&dia_semana) && !feriados.contains(&data_str)
 }
 
-/// Executa o comando `radar-fundamentos` conforme flags, usando feriados e códigos
+/// Executa o comando `radar-fundamentos` coma as opções adequadas e avaliando a
+/// pertinência de feriados e códigos
 fn executar_radar(
 	tipo: &str,
 	codes: &[String],
@@ -108,7 +109,7 @@ fn executar_radar(
 	let hoje = agora.date_naive();
 	let hora = agora.hour();
 
-	let cond_exec = bypass || (is_dia_util(hoje, feriados) && (17..=21).contains(&hora));
+	let cond_exec = bypass || (e_dia_util(hoje, feriados) && (17..=21).contains(&hora));
 	println!(
 		"[runner] [{}] Hora atual: {}h, data {} => executável? {}",
 		tipo,
@@ -116,7 +117,12 @@ fn executar_radar(
 		hoje.format("%Y-%m-%d"),
 		cond_exec
 	);
-
+	// TODO: Alterar as funções que precisam indicar caminhos no sistema de arquivos
+	// para fazer uso de camainhos relativos, seja com variáveis:
+	// let home = env::var("HOME").expect("HOME não definido");
+	// ou com o crate path:
+	// let mut path = home_dir().expect("não consegui localizar o home dir");
+	// path.push("meuarquivo.txt");
 	if cond_exec {
 		println!("[runner] [{}] Iniciando `radar-fundamentos`...", tipo);
 		let mut cmd = Command::new("radar-fundamentos");
@@ -152,7 +158,7 @@ fn executar_radar(
 }
 
 #[derive(Parser)]
-#[command(name = "radar-runner", version = "0.2", author = "Você")]
+#[command(name = "radar-runner", version = "0.2", author = "Author")]
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
@@ -230,52 +236,47 @@ fn main() {
 				sleep(Duration::from_secs(intervalo * 3600));
 			}
 		}
-		//
 		Commands::Cotacoes {
 			yaml,
 			saida,
 			frequencia,
 			intervalo_inicio,
 			intervalo_fim,
-		} => {
-			//let feriados = carregar_feriados_yaml();
+		} => loop {
+			let agora = Local::now().with_timezone(&Sao_Paulo);
+			let hora = agora.hour();
+			let hoje = agora.date_naive();
 
-			loop {
-				let agora = Local::now().with_timezone(&Sao_Paulo);
-				let hora = agora.hour();
-				let hoje = agora.date_naive();
+			let dentro_da_janela = (intervalo_inicio..=intervalo_fim).contains(&hora);
+			let eh_dia_util = e_dia_util(hoje, &feriados);
 
-				let dentro_da_janela = (intervalo_inicio..=intervalo_fim).contains(&hora);
-				let eh_dia_util = is_dia_util(hoje, &feriados);
+			println!(
+				"[runner] Checando: hora={} ∈ {}..{}, dia útil?={}, feriado={}, frequência={} min",
+				hora, intervalo_inicio, intervalo_fim, eh_dia_util, !eh_dia_util, frequencia
+			);
 
-				println!(
-					"[runner] Checando: hora={} ∈ {}..{}, dia útil?={}, feriado={}, frequência={} min",
-					hora, intervalo_inicio, intervalo_fim, eh_dia_util, !eh_dia_util, frequencia
-				);
+			if dentro_da_janela && eh_dia_util {
+				println!("[runner] Executando radar-fundamentos...");
+				let status = Command::new("radar-fundamentos")
+					.args(&["cotacoes", "--yaml", &yaml, "--saida", &saida])
+					.status();
 
-				if dentro_da_janela && eh_dia_util {
-					println!("[runner] Executando radar-fundamentos...");
-					let status = Command::new("radar-fundamentos")
-						.args(&["cotacoes", "--yaml", &yaml, "--saida", &saida])
-						.status();
-
-					match status {
-						Ok(s) if s.success() => {
-							println!("[runner] Execução bem-sucedida.");
-						}
-						Ok(s) => {
-							eprintln!("[runner] radar-fundamentus retornou código {}", s);
-						}
-						Err(e) => {
-							eprintln!("[runner] Erro ao executar radar-fundamentus: {}", e);
-						}
+				match status {
+					Ok(s) if s.success() => {
+						println!("[runner] Execução bem-sucedida.");
 					}
-				} else {
-					println!("[runner] Aguardando próxima janela...");
+					Ok(s) => {
+						eprintln!("[runner] radar-fundamentus retornou código {}", s);
+					}
+					Err(e) => {
+						eprintln!("[runner] Erro ao executar radar-fundamentus: {}", e);
+					}
 				}
-
-				sleep(Duration::from_secs(frequencia * 60));
+			} else {
+				println!("[runner] Aguardando próxima janela...");
 			}
-		}
+
+			sleep(Duration::from_secs(frequencia * 60));
+		},
 	}
 }
