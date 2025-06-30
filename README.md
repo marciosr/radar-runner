@@ -64,7 +64,7 @@ Crie o arquivo `~/.config/systemd/user/radar-runner.service` com o seguinte cont
 Description=Radar Runner - Agendador de Coletas
 
 [Service]
-ExecStart=%h/.cargo/bin/radar-runner cotacoes --frequencia 15m --intervalo 10..17
+ExecStart=%h/.cargo/bin/radar-runner cotacoes --frequencia 30 --intervalo-inicio 10 --intervalo-fim 17
 Restart=on-failure
 WorkingDirectory=%h/radar-dados
 
