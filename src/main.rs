@@ -1,8 +1,8 @@
 use chrono::{Datelike, Local, NaiveDate, Timelike};
 use chrono_tz::America::Sao_Paulo;
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
-use serde_yml;
+use dirs;
+use serde::Deserialize;
 use std::{
 	fs::{File, create_dir_all},
 	io::{Read, Write},
@@ -11,83 +11,202 @@ use std::{
 	thread::sleep,
 	time::Duration,
 };
+use toml;
 
-/// Configuração de feriados lida de um arquivo YAML `feriados.yaml`
+// --- Funções Auxiliares de Configuração ---
+
+fn default_feriados() -> Vec<String> {
+	Vec::new()
+}
+
+// NOVO: Função padrão para a lista COMPLETA de ativos (alta frequência/cotações)
+fn default_ativos_codes() -> Vec<String> {
+	vec![
+		"SNEL11".to_string(),
+		"AFHI11".to_string(),
+		"RELG11".to_string(),
+		"VGIR11".to_string(),
+		"VALE3".to_string(),
+		"PRIO3".to_string(),
+		"BRAV3".to_string(),
+		"KLBN11".to_string(),
+		"ITSA4".to_string(),
+	]
+}
+
+fn default_acao_codes() -> Vec<String> {
+	vec![
+		"VALE3".to_string(),
+		"PRIO3".to_string(),
+		"BRAV3".to_string(),
+		"KLBN11".to_string(),
+		"ITSA4".to_string(),
+	]
+}
+fn default_fundo_codes() -> Vec<String> {
+	vec![
+		"SNEL11".to_string(),
+		"AFHI11".to_string(),
+		"RELG11".to_string(),
+		"VGIR11".to_string(),
+	]
+}
+fn default_intervalo_inicio() -> u32 {
+	10
+}
+fn default_intervalo_fim() -> u32 {
+	20
+}
+fn default_frequencia_minutos() -> u64 {
+	15
+}
+
+/// Estrutura para as configurações do radar-runner lidas de radar-runner.conf (TOML)
 #[derive(Deserialize)]
-struct FeriadosConfig {
+struct RunnerConfig {
+	#[serde(default = "default_feriados")]
 	feriados: Vec<String>,
+
+	#[serde(default = "default_intervalo_inicio")]
+	intervalo_inicio: u32,
+	#[serde(default = "default_intervalo_fim")]
+	intervalo_fim: u32,
+
+	#[serde(default = "default_frequencia_minutos")]
+	frequencia_minutos: u64,
+
+	// NOVO: Lista de ativos de alta frequência (cotacoes)
+	#[serde(default = "default_ativos_codes")]
+	ativos_codes: Vec<String>,
+
+	// Listas de ativos (baixa frequência / fundamentalista)
+	#[serde(default = "default_acao_codes")]
+	acao_codes: Vec<String>,
+	#[serde(default = "default_fundo_codes")]
+	fundo_codes: Vec<String>,
 }
 
-/// Configuração de códigos lidos de um arquivo YAML `acoes.yaml` ou `fundos.yaml`
-#[derive(Serialize, Deserialize)]
-struct CodigosConfig {
-	codes: Vec<String>,
+/// Retorna o caminho para o arquivo de configuração TOML: ~/.config/radar/radar-runner.conf
+fn get_config_path() -> PathBuf {
+	let mut config_path = dirs::config_dir().unwrap_or_else(|| {
+		eprintln!(
+			"[runner] Aviso: Não foi possível determinar o diretório de configuração. Usando ./"
+		);
+		PathBuf::from(".")
+	});
+	config_path.push("radar");
+	let _ = create_dir_all(&config_path);
+	config_path.push("radar-runner.conf");
+	config_path
 }
 
-/// Cria o conteúdo padrão e salva o arquivo YAML se ele não existir
-fn salvar_lista_de_ativos(_tipo: TipoAtivo, caminho: &PathBuf, padrao: &[&str]) {
+/// Carrega a configuração principal do radar-runner a partir do arquivo TOML.
+/// Cria o arquivo padrão caso não exista.
+fn carregar_config() -> RunnerConfig {
+	let caminho = get_config_path();
+
+	// Conteúdo padrão a ser escrito se o arquivo não existir (Atualizado com ativos_codes)
+	let padrao_toml = r#"
+# Datas de feriados no formato YYYY-MM-DD
+feriados = [
+    "2025-01-01",
+    "2025-03-03",
+    "2025-03-04",
+    "2025-04-18",
+    "2025-04-21",
+    "2025-05-01",
+    "2025-06-19",
+    "2025-11-20",
+    "2025-12-24",
+    "2025-12-25",
+    "2025-12-31"
+]
+
+# Intervalo de horas para rastreio periódico (0..23)
+intervalo_inicio = 10
+intervalo_fim = 20
+
+# Frequência de execução do modo 'cotacoes' em minutos
+frequencia_minutos = 15
+
+# Lista de códigos de ativos de alta frequência (cotacoes)
+ativos_codes = ["VALE3", "PRIO3", "BRAV3", "KLBN11", "ITSA4", "SNEL11", "AFHI11", "RELG11", "VGIR11"]
+
+# Lista de códigos de ativos de Ações (fundamentalista/histórico)
+acao_codes = ["VALE3", "PRIO3", "BRAV3", "KLBN11", "ITSA4"]
+
+# Lista de códigos de Fundos (fundamentalista/histórico)
+fundo_codes = ["SNEL11", "AFHI11", "RELG11", "VGIR11"]
+"#;
+
+	// Cria o arquivo padrão se não existir
 	if !caminho.exists() {
-		let config = CodigosConfig {
-			codes: padrao.iter().map(|s| s.to_string()).collect(),
-		};
-
-		if let Ok(serializado) = serde_yml::to_string(&config) {
-			if let Ok(mut arquivo) = File::create(&caminho) {
-				let _ = arquivo.write_all(serializado.as_bytes());
-				println!("[runner] Arquivo padrão criado: {}", caminho.display());
+		if let Ok(mut arquivo) = File::create(&caminho) {
+			if arquivo.write_all(padrao_toml.as_bytes()).is_ok() {
+				println!(
+					"[runner] Arquivo de configuração padrão criado: {}",
+					caminho.display()
+				);
+			} else {
+				eprintln!(
+					"[runner] Falha ao escrever arquivo padrão: {}",
+					caminho.display()
+				);
 			}
+		} else {
+			eprintln!(
+				"[runner] Falha ao criar arquivo padrão: {}",
+				caminho.display()
+			);
 		}
 	}
-}
 
-/// Carrega os códigos de ativos a partir de um arquivo YAML conforme o tipo.
-/// Cria o arquivo com padrão caso não exista.
-// TODO: Criar uma única função ou macro que carrege os arquivos de ativos e também de feriados.
-fn carregar_ativos(tipo: TipoAtivo) -> Vec<String> {
-	let (nome_arquivo, padrao): (&str, &[&str]) = match tipo {
-		TipoAtivo::Acao => (
-			"acoes.yaml",
-			&["VALE3", "PRIO3", "BRAV3", "KLBN11", "ITSA4"],
-		),
-		TipoAtivo::Fundo => ("fundos.yaml", &["SNEL11", "AFHI11", "RELG11", "VGIR11"]),
-	};
-
-	let caminho = PathBuf::from(nome_arquivo);
-	salvar_lista_de_ativos(tipo, &caminho, padrao);
-
+	// Tenta ler e parsear o arquivo
 	if let Ok(mut arquivo) = File::open(&caminho) {
 		let mut conteudo = String::new();
 		if arquivo.read_to_string(&mut conteudo).is_ok() {
-			if let Ok(cfg) = serde_yml::from_str::<CodigosConfig>(&conteudo) {
-				return cfg.codes;
+			match toml::from_str::<RunnerConfig>(&conteudo) {
+				Ok(cfg) => return cfg,
+				Err(e) => eprintln!(
+					"[runner] Falha ao parsear {}: {} => usando padrão.",
+					caminho.display(),
+					e
+				),
 			}
+		} else {
+			eprintln!(
+				"[runner] Falha ao ler {}: usando padrão.",
+				caminho.display()
+			);
 		}
+	} else {
 		eprintln!(
-			"[runner] Falha ao ler ou parsear {}: usando padrão",
+			"[runner] Aviso: Arquivo de configuração não encontrado: {}. Usando padrão.",
 			caminho.display()
 		);
 	}
 
-	// Caso não o arquivo não seja carregado do disco, retorna os ativos padrão
-	// definidos acima.
-	padrao.iter().map(|s| s.to_string()).collect()
+	// Retorna a configuração padrão em caso de falha
+	RunnerConfig {
+		feriados: default_feriados(),
+		intervalo_inicio: default_intervalo_inicio(),
+		intervalo_fim: default_intervalo_fim(),
+		frequencia_minutos: default_frequencia_minutos(),
+		ativos_codes: default_ativos_codes(),
+		acao_codes: default_acao_codes(),
+		fundo_codes: default_fundo_codes(),
+	}
 }
 
-/// Carrega os feriados a partir de um arquivo YAML localizado no diretório de trabalho do aplicativo
-// TODO: Criar uma única função ou macro que carrege os arquivos de ativos e também de feriados.
-fn carregar_feriados_yaml() -> Vec<String> {
-	let caminho = PathBuf::from("feriados.yaml");
-	if let Ok(mut arquivo) = File::open(&caminho) {
-		let mut conteudo = String::new();
-		if arquivo.read_to_string(&mut conteudo).is_ok() {
-			if let Ok(cfg) = serde_yml::from_str::<FeriadosConfig>(&conteudo) {
-				return cfg.feriados;
-			}
-		}
+/// Retorna a lista de ativos a partir da configuração carregada.
+fn get_ativos_from_config(config: &RunnerConfig, tipo: TipoAtivo) -> &[String] {
+	match tipo {
+		TipoAtivo::Acao => &config.acao_codes,
+		TipoAtivo::Fundo => &config.fundo_codes,
 	}
-	eprintln!("[runner] Aviso: feriados.yaml não encontrado ou inválido.");
-	Vec::new()
 }
+
+// --- Funções de Lógica ---
 
 /// Verifica se a data é dia útil (Segunda a Sexta) e não está em feriados
 fn e_dia_util(data: NaiveDate, feriados: &[String]) -> bool {
@@ -96,43 +215,62 @@ fn e_dia_util(data: NaiveDate, feriados: &[String]) -> bool {
 	(1..=5).contains(&dia_semana) && !feriados.contains(&data_str)
 }
 
-/// Executa o comando `radar-fundamentos` coma as opções adequadas e avaliando a
-/// pertinência de feriados e códigos
+/// Retorna o caminho base para os arquivos de dados (e.g., para o modo histórico)
+fn get_data_base_path() -> PathBuf {
+	let mut data_path = dirs::data_dir().unwrap_or_else(|| {
+		eprintln!("[runner] Aviso: Não foi possível determinar o diretório de dados. Usando ./");
+		PathBuf::from(".")
+	});
+	data_path.push("radar-fundamentos");
+	let _ = create_dir_all(&data_path);
+	data_path
+}
+
+/// Executa o comando `radar-fundamentos` coma as opções adequadas.
 fn executar_radar(
 	tipo: &str,
 	codes: &[String],
-	bypass: bool,
 	historico: bool,
 	feriados: &[String],
+	intervalo_inicio: u32,
+	intervalo_fim: u32,
+	executar_agora: bool,
 ) {
 	let agora = Local::now().with_timezone(&Sao_Paulo);
 	let hoje = agora.date_naive();
 	let hora = agora.hour();
 
-	let cond_exec = bypass || (e_dia_util(hoje, feriados) && (17..=21).contains(&hora));
+	let cond_exec_periodica =
+		e_dia_util(hoje, feriados) && (intervalo_inicio..=intervalo_fim).contains(&hora);
+
+	let cond_exec = executar_agora || cond_exec_periodica;
+
 	println!(
-		"[runner] [{}] Hora atual: {}h, data {} => executável? {}",
+		"[runner] [{}] Hora atual: {}h, data {} => Executável? {}",
 		tipo,
 		hora,
 		hoje.format("%Y-%m-%d"),
 		cond_exec
 	);
-	// TODO: Alterar as funções que precisam indicar caminhos no sistema de arquivos
-	// para fazer uso de camainhos relativos, seja com variáveis:
-	// let home = env::var("HOME").expect("HOME não definido");
-	// ou com o crate path:
-	// let mut path = home_dir().expect("não consegui localizar o home dir");
-	// path.push("meuarquivo.txt");
+
 	if cond_exec {
 		println!("[runner] [{}] Iniciando `radar-fundamentos`...", tipo);
 		let mut cmd = Command::new("radar-fundamentos");
-		cmd.arg("export").arg(tipo);
+		let subcomando = if historico { "export" } else { "cotacoes" };
+
+		cmd.arg(subcomando);
+
+		if historico {
+			cmd.arg(tipo);
+		}
+
 		for code in codes {
 			cmd.arg(code);
 		}
 
 		if historico {
-			let dir = PathBuf::from("/var/home/marcio/.local/share/radar-runner/dados/historico");
+			let mut dir = get_data_base_path();
+			dir.push("dados/historico");
 			let _ = create_dir_all(&dir);
 			let timestamp = agora.format("%Y-%m-%d_%Hh-%Mm-%Ss");
 			let arquivo = dir.join(format!("{}_{}.csv", tipo, timestamp));
@@ -142,6 +280,10 @@ fn executar_radar(
 				tipo,
 				arquivo.display()
 			);
+		} else if subcomando == "cotacoes" {
+			let saida_padrao = get_data_base_path().join("cotacoes.csv");
+			cmd.arg("--saida").arg(&saida_padrao);
+			println!("[runner] [{}] Saída em {}", tipo, saida_padrao.display());
 		}
 
 		println!("[runner] [{}] Comando completo: {:?}", tipo, cmd);
@@ -151,14 +293,16 @@ fn executar_radar(
 		}
 	} else {
 		println!(
-			"[runner] [{}] Fora do horário ou feriado. Bypass={}",
-			tipo, bypass
+			"[runner] [{}] Fora do horário ({}..{}) ou feriado. Aguardando a próxima janela.",
+			tipo, intervalo_inicio, intervalo_fim
 		);
 	}
 }
 
+// --- Definições de CLI Simplificadas ---
+
 #[derive(Parser)]
-#[command(name = "radar-runner", version = "0.2", author = "Author")]
+#[command(name = "radar-runner", version = "0.4", author = "Author")]
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
@@ -166,38 +310,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-	/// Executa com bypass (força execução)
-	Bypass {
-		#[arg(value_enum)]
-		tipo: TipoAtivo,
-	},
-	/// Executa em modo histórico
+	/// Executa a coleta de cotações uma única vez, ignorando agendamento.
+	CotacoesAgora,
+
+	/// Executa em modo histórico (periódico, ativos e horários do TOML).
 	Historico {
 		#[arg(value_enum)]
 		tipo: TipoAtivo,
 	},
-	/// Executa o radar-fundamentus para atualizar cotações via YAML
-	Cotacoes {
-		/// Caminho para o arquivo YAML com os ativos
-		#[arg(long, default_value = "ativos.yaml")]
-		yaml: String,
 
-		/// Caminho para o arquivo CSV de saída
-		#[arg(long, default_value = "cotacoes.csv")]
-		saida: String,
-
-		/// Frequência de execução em minutos
-		#[arg(long, default_value = "15")]
-		frequencia: u64,
-
-		/// Hora inicial da janela permitida (ex: 10)
-		#[arg(long, default_value = "10")]
-		intervalo_inicio: u32,
-
-		/// Hora final da janela permitida (ex: 17)
-		#[arg(long, default_value = "17")]
-		intervalo_fim: u32,
-	},
+	/// Executa a coleta de cotações (periódico, ativos, horários e frequência do TOML).
+	Cotacoes,
 }
 
 #[derive(Copy, Clone, ValueEnum, Debug)]
@@ -206,77 +329,97 @@ enum TipoAtivo {
 	Fundo,
 }
 
+// --- Função Principal Atualizada ---
+
 fn main() {
-	let intervalo = 3;
-	let feriados = carregar_feriados_yaml();
+	let runner_config = carregar_config();
+	let feriados = &runner_config.feriados;
 	let cli = Cli::parse();
 
+	let config_inicio = runner_config.intervalo_inicio;
+	let config_fim = runner_config.intervalo_fim;
+	let frequencia_minutos = runner_config.frequencia_minutos;
+
+	// NOVO: Usaremos esta lista para as cotações
+	let ativos_de_cotacoes = &runner_config.ativos_codes;
+
+	// Lista de tipos e ativos a serem iterados (Usada apenas para o modo Historico)
+	let _ativos_e_tipos_fundamentalista = [
+		(
+			TipoAtivo::Acao,
+			get_ativos_from_config(&runner_config, TipoAtivo::Acao),
+		),
+		(
+			TipoAtivo::Fundo,
+			get_ativos_from_config(&runner_config, TipoAtivo::Fundo),
+		),
+	];
+
 	match cli.command {
-		Commands::Bypass { tipo } => {
-			let codes = carregar_ativos(tipo);
-			let tipo_str = format!("{:?}", tipo).to_lowercase();
+		// MODO SOB DEMANDA (COTAÇÕES AGORA)
+		Commands::CotacoesAgora => {
 			println!(
-				"[runner] Iniciando com bypass=true historico=false (tipo={})",
-				tipo_str
+				"[runner] Execução única de cotações (bypass) para {} ativos.",
+				ativos_de_cotacoes.len()
 			);
-			loop {
-				executar_radar(&tipo_str, &codes, true, false, &feriados);
-				sleep(Duration::from_secs(intervalo * 3600));
-			}
+
+			executar_radar(
+				"geral",
+				ativos_de_cotacoes, // Passa a lista COMPLETA de ativos
+				false,
+				feriados,
+				config_inicio,
+				config_fim,
+				true,
+			);
 		}
+
+		// MODO HISTÓRICO (PERIÓDICO)
 		Commands::Historico { tipo } => {
-			let codes = carregar_ativos(tipo);
+			let codes = get_ativos_from_config(&runner_config, tipo);
 			let tipo_str = format!("{:?}", tipo).to_lowercase();
+			let intervalo_secs = 3 * 3600;
+
 			println!(
-				"[runner] Iniciando com bypass=false historico=true (tipo={})",
-				tipo_str
+				"[runner] Iniciando modo histórico (tipo={}). Checagem a cada 3 horas, no intervalo {}:00 - {}:00.",
+				tipo_str, config_inicio, config_fim
 			);
 			loop {
-				executar_radar(&tipo_str, &codes, false, true, &feriados);
-				sleep(Duration::from_secs(intervalo * 3600));
+				executar_radar(
+					&tipo_str,
+					codes,
+					true,
+					feriados,
+					config_inicio,
+					config_fim,
+					false,
+				);
+				sleep(Duration::from_secs(intervalo_secs));
 			}
 		}
-		Commands::Cotacoes {
-			yaml,
-			saida,
-			frequencia,
-			intervalo_inicio,
-			intervalo_fim,
-		} => loop {
-			let agora = Local::now().with_timezone(&Sao_Paulo);
-			let hora = agora.hour();
-			let hoje = agora.date_naive();
 
-			let dentro_da_janela = (intervalo_inicio..=intervalo_fim).contains(&hora);
-			let eh_dia_util = e_dia_util(hoje, &feriados);
-
+		// MODO COTAÇÕES (PERIÓDICO)
+		Commands::Cotacoes => loop {
 			println!(
-				"[runner] Checando: hora={} ∈ {}..{}, dia útil?={}, feriado={}, frequência={} min",
-				hora, intervalo_inicio, intervalo_fim, eh_dia_util, !eh_dia_util, frequencia
+				"[runner] Iniciando coleta periódica de {} cotações.",
+				ativos_de_cotacoes.len()
 			);
 
-			if dentro_da_janela && eh_dia_util {
-				println!("[runner] Executando radar-fundamentos...");
-				let status = Command::new("radar-fundamentos")
-					.args(&["cotacoes", "--yaml", &yaml, "--saida", &saida])
-					.status();
+			executar_radar(
+				"geral",
+				ativos_de_cotacoes, // Passa a lista COMPLETA de ativos
+				false,
+				feriados,
+				config_inicio,
+				config_fim,
+				false,
+			);
 
-				match status {
-					Ok(s) if s.success() => {
-						println!("[runner] Execução bem-sucedida.");
-					}
-					Ok(s) => {
-						eprintln!("[runner] radar-fundamentus retornou código {}", s);
-					}
-					Err(e) => {
-						eprintln!("[runner] Erro ao executar radar-fundamentus: {}", e);
-					}
-				}
-			} else {
-				println!("[runner] Aguardando próxima janela...");
-			}
-
-			sleep(Duration::from_secs(frequencia * 60));
+			println!(
+				"[runner] Aguardando {} minutos (frequência do TOML)...",
+				frequencia_minutos
+			);
+			sleep(Duration::from_secs(frequencia_minutos * 60));
 		},
 	}
 }
