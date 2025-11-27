@@ -221,7 +221,7 @@ fn get_data_base_path() -> PathBuf {
 		eprintln!("[runner] Aviso: Não foi possível determinar o diretório de dados. Usando ./");
 		PathBuf::from(".")
 	});
-	data_path.push("radar-fundamentos");
+	data_path.push("radar");
 	let _ = create_dir_all(&data_path);
 	data_path
 }
