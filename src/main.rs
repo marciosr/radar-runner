@@ -262,8 +262,8 @@ fn executar_radar(
 		Commands::IndicadoresAgora { tipo } => ("indicadores", tipo),
 	};
 	let tipo = match argumento {
-		TipoAtivo::Acoes => "acao",
-		TipoAtivo::Fundos => "fundo",
+		TipoAtivo::Acoes => "acoes",
+		TipoAtivo::Fundos => "fundos",
 		TipoAtivo::Geral => "",
 	};
 	println!(
