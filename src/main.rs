@@ -61,6 +61,9 @@ fn default_frequencia_minutos() -> u64 {
 	15
 }
 
+fn default_frequencia_indicadores() -> u64 {
+	360
+}
 /// Estrutura para as configurações do radar-runner lidas de radar-runner.conf (TOML)
 #[derive(Deserialize)]
 struct RunnerConfig {
@@ -75,7 +78,9 @@ struct RunnerConfig {
 	#[serde(default = "default_frequencia_minutos")]
 	frequencia_minutos: u64,
 
-	// NOVO: Lista de ativos de alta frequência (cotacoes)
+	#[serde(default = "default_frequencia_indicadores")]
+	frequencia_indicadores: u64,
+
 	#[serde(default = "default_ativos_codes")]
 	ativos_codes: Vec<String>,
 
@@ -96,7 +101,7 @@ fn get_config_path() -> PathBuf {
 	});
 	config_path.push("radar");
 	let _ = create_dir_all(&config_path);
-	config_path.push("radar-runner.conf");
+	config_path.push("radar-runner.toml");
 	config_path
 }
 
@@ -128,6 +133,9 @@ intervalo_fim = 20
 
 # Frequência de execução do modo 'cotacoes' em minutos
 frequencia_minutos = 15
+
+# Frequência de execução do modo 'indicadores' em minutos
+frequencia_indicadores = 360
 
 # Lista de códigos de ativos de alta frequência (cotacoes)
 ativos_codes = ["VALE3", "PRIO3", "BRAV3", "KLBN11", "ITSA4", "SNEL11", "AFHI11", "RELG11", "VGIR11"]
@@ -192,6 +200,7 @@ fundo_codes = ["SNEL11", "AFHI11", "RELG11", "VGIR11"]
 		intervalo_inicio: default_intervalo_inicio(),
 		intervalo_fim: default_intervalo_fim(),
 		frequencia_minutos: default_frequencia_minutos(),
+		frequencia_indicadores: default_frequencia_indicadores(),
 		ativos_codes: default_ativos_codes(),
 		acao_codes: default_acao_codes(),
 		fundo_codes: default_fundo_codes(),
@@ -201,8 +210,9 @@ fundo_codes = ["SNEL11", "AFHI11", "RELG11", "VGIR11"]
 /// Retorna a lista de ativos a partir da configuração carregada.
 fn get_ativos_from_config(config: &RunnerConfig, tipo: TipoAtivo) -> &[String] {
 	match tipo {
-		TipoAtivo::Acao => &config.acao_codes,
-		TipoAtivo::Fundo => &config.fundo_codes,
+		TipoAtivo::Acoes => &config.acao_codes,
+		TipoAtivo::Fundos => &config.fundo_codes,
+		_ => &[],
 	}
 }
 
@@ -228,9 +238,8 @@ fn get_data_base_path() -> PathBuf {
 
 /// Executa o comando `radar-fundamentos` coma as opções adequadas.
 fn executar_radar(
-	tipo: &str,
 	codes: &[String],
-	historico: bool,
+	comando: Commands,
 	feriados: &[String],
 	intervalo_inicio: u32,
 	intervalo_fim: u32,
@@ -245,30 +254,38 @@ fn executar_radar(
 
 	let cond_exec = executar_agora || cond_exec_periodica;
 
+	let (subcomando, argumento) = match comando {
+		Commands::Cotacoes => ("cotacoes", TipoAtivo::Geral),
+		Commands::Historico { tipo } => ("historico", tipo),
+		Commands::CotacoesAgora => ("cotacoes-agora", TipoAtivo::Geral),
+		Commands::Indicadores { tipo } => ("indicadores", tipo),
+		Commands::IndicadoresAgora { tipo } => ("indicadores", tipo),
+	};
+	let tipo = match argumento {
+		TipoAtivo::Acoes => "acao",
+		TipoAtivo::Fundos => "fundo",
+		TipoAtivo::Geral => "",
+	};
 	println!(
 		"[runner] [{}] Hora atual: {}h, data {} => Executável? {}",
-		tipo,
+		subcomando,
 		hora,
 		hoje.format("%Y-%m-%d"),
 		cond_exec
 	);
 
 	if cond_exec {
-		println!("[runner] [{}] Iniciando `radar-fundamentos`...", tipo);
 		let mut cmd = Command::new("radar-fundamentos");
-		let subcomando = if historico { "export" } else { "cotacoes" };
 
 		cmd.arg(subcomando);
 
-		if historico {
-			cmd.arg(tipo);
-		}
-
+		cmd.arg(tipo);
+		println!("[runner] [{}] Iniciando `radar-fundamentos`...", tipo);
 		for code in codes {
 			cmd.arg(code);
 		}
-
-		if historico {
+		let saida_padrao;
+		if subcomando == "historico" {
 			let mut dir = get_data_base_path();
 			dir.push("dados/historico");
 			let _ = create_dir_all(&dir);
@@ -282,6 +299,14 @@ fn executar_radar(
 			);
 		} else if subcomando == "cotacoes" {
 			let saida_padrao = get_data_base_path().join("cotacoes.csv");
+			cmd.arg("--saida").arg(&saida_padrao);
+			println!("[runner] [{}] Saída em {}", tipo, saida_padrao.display());
+		} else if subcomando == "indicadores" {
+			if argumento == TipoAtivo::Acoes {
+				saida_padrao = get_data_base_path().join("acoes.csv");
+			} else {
+				saida_padrao = get_data_base_path().join("fundos.csv");
+			};
 			cmd.arg("--saida").arg(&saida_padrao);
 			println!("[runner] [{}] Saída em {}", tipo, saida_padrao.display());
 		}
@@ -310,6 +335,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+	/// Agenda a coleta de cotações (periódico, ativos, horários e frequência do TOML).
+	Cotacoes,
+
 	/// Executa a coleta de cotações uma única vez, ignorando agendamento.
 	CotacoesAgora,
 
@@ -318,18 +346,25 @@ enum Commands {
 		#[arg(value_enum)]
 		tipo: TipoAtivo,
 	},
-
-	/// Executa a coleta de cotações (periódico, ativos, horários e frequência do TOML).
-	Cotacoes,
+	/// Agenda a coleta de dados fundamentalistas no fundamentus.com.br (Ativos cadastrados na configuração)
+	Indicadores {
+		#[arg(value_enum)]
+		tipo: TipoAtivo,
+	},
+	/// Executa coleta instantânea de dados fundamentalistas no fundamentus.com.br (Ativos cadastrados na configuração)
+	IndicadoresAgora {
+		#[arg(value_enum)]
+		tipo: TipoAtivo,
+	},
 }
 
-#[derive(Copy, Clone, ValueEnum, Debug)]
+#[derive(Copy, Clone, ValueEnum, Debug, PartialEq)]
 enum TipoAtivo {
-	Acao,
-	Fundo,
+	Acoes,
+	Fundos,
+	#[clap(skip)]
+	Geral,
 }
-
-// --- Função Principal Atualizada ---
 
 fn main() {
 	let runner_config = carregar_config();
@@ -339,23 +374,48 @@ fn main() {
 	let config_inicio = runner_config.intervalo_inicio;
 	let config_fim = runner_config.intervalo_fim;
 	let frequencia_minutos = runner_config.frequencia_minutos;
+	let frequencia_indicadores = runner_config.frequencia_indicadores;
 
-	// NOVO: Usaremos esta lista para as cotações
+	// Carrega listas de ativos gerais, ações e fundos fechados a partir da configuração.
 	let ativos_de_cotacoes = &runner_config.ativos_codes;
+	let acoes_codes = &runner_config.acao_codes;
+	let fundos_codes = &runner_config.fundo_codes;
 
 	// Lista de tipos e ativos a serem iterados (Usada apenas para o modo Historico)
 	let _ativos_e_tipos_fundamentalista = [
 		(
-			TipoAtivo::Acao,
-			get_ativos_from_config(&runner_config, TipoAtivo::Acao),
+			TipoAtivo::Acoes,
+			get_ativos_from_config(&runner_config, TipoAtivo::Acoes),
 		),
 		(
-			TipoAtivo::Fundo,
-			get_ativos_from_config(&runner_config, TipoAtivo::Fundo),
+			TipoAtivo::Fundos,
+			get_ativos_from_config(&runner_config, TipoAtivo::Fundos),
 		),
 	];
 
 	match cli.command {
+		// MODO COTAÇÕES (PERIÓDICO)
+		Commands::Cotacoes => loop {
+			println!(
+				"[runner] Iniciando coleta periódica de {} cotações.",
+				ativos_de_cotacoes.len()
+			);
+
+			executar_radar(
+				ativos_de_cotacoes, // Passa a lista COMPLETA de ativos
+				Commands::Cotacoes,
+				feriados,
+				config_inicio,
+				config_fim,
+				false,
+			);
+
+			println!(
+				"[runner] Aguardando {} minutos (frequência do TOML)...",
+				frequencia_minutos
+			);
+			sleep(Duration::from_secs(frequencia_minutos * 60));
+		},
 		// MODO SOB DEMANDA (COTAÇÕES AGORA)
 		Commands::CotacoesAgora => {
 			println!(
@@ -364,9 +424,8 @@ fn main() {
 			);
 
 			executar_radar(
-				"geral",
 				ativos_de_cotacoes, // Passa a lista COMPLETA de ativos
-				false,
+				Commands::CotacoesAgora,
 				feriados,
 				config_inicio,
 				config_fim,
@@ -386,9 +445,8 @@ fn main() {
 			);
 			loop {
 				executar_radar(
-					&tipo_str,
 					codes,
-					true,
+					Commands::Historico { tipo },
 					feriados,
 					config_inicio,
 					config_fim,
@@ -397,29 +455,51 @@ fn main() {
 				sleep(Duration::from_secs(intervalo_secs));
 			}
 		}
+		Commands::Indicadores { tipo } => {
+			let tipo_str = format!("{:?}", tipo).to_lowercase();
+			let codigos = match tipo {
+				TipoAtivo::Acoes => acoes_codes.as_slice(),
+				TipoAtivo::Fundos => fundos_codes.as_slice(),
+				TipoAtivo::Geral => &[],
+			};
 
-		// MODO COTAÇÕES (PERIÓDICO)
-		Commands::Cotacoes => loop {
 			println!(
-				"[runner] Iniciando coleta periódica de {} cotações.",
-				ativos_de_cotacoes.len()
+				"[runner] Iniciando modo indicadores (tipo={}). Checagem no intervalo {}:00 - {}:00.",
+				tipo_str, config_inicio, config_fim
+			);
+			loop {
+				executar_radar(
+					codigos,
+					Commands::Indicadores { tipo },
+					feriados,
+					config_inicio,
+					config_fim,
+					true,
+				);
+				sleep(Duration::from_secs(frequencia_indicadores));
+			}
+		}
+		Commands::IndicadoresAgora { tipo } => {
+			let tipo_str = format!("{:?}", tipo).to_lowercase();
+			let codigos = match tipo {
+				TipoAtivo::Acoes => acoes_codes.as_slice(),
+				TipoAtivo::Fundos => fundos_codes.as_slice(),
+				TipoAtivo::Geral => &[],
+			};
+
+			println!(
+				"[runner] Executando modo intantâneo de coleta de indicadores  (tipo={}).",
+				tipo_str
 			);
 
 			executar_radar(
-				"geral",
-				ativos_de_cotacoes, // Passa a lista COMPLETA de ativos
-				false,
+				codigos,
+				Commands::Indicadores { tipo },
 				feriados,
 				config_inicio,
 				config_fim,
-				false,
+				true,
 			);
-
-			println!(
-				"[runner] Aguardando {} minutos (frequência do TOML)...",
-				frequencia_minutos
-			);
-			sleep(Duration::from_secs(frequencia_minutos * 60));
-		},
+		}
 	}
 }

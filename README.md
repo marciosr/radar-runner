@@ -26,6 +26,9 @@ intervalo_fim = 20
 # Frequência de execução do modo 'cotacoes' em minutos
 frequencia_minutos = 15
 
+# Frequência de execução do modo 'indicadores' em minutos
+frequencia_indicadores = 360
+
 # Lista de códigos de ativos de alta frequência (usada pelo modo 'cotacoes')
 ativos_codes = ["VALE3", "PRIO3", "KLBN11", "AFHI11"]
 
@@ -49,7 +52,8 @@ radar-runner <COMANDO>
 | **`cotacoes`** | Executa a coleta de cotações dos **`ativos_codes`** periodicamente, respeitando a `frequencia_minutos` e o `intervalo_inicio`/`fim` do TOML. | `radar-fundamentos cotacoes <ativos> --saida ...` | Periódica (Agendada) |
 | **`historico <tipo>`** | Executa a coleta fundamentalista dos ativos (`acao_codes` ou `fundo_codes`) periodicamente. Ideal para rodar a cada 3h ou 4h, dentro do intervalo definido. | `radar-fundamentos export <tipo> <ativos> --saida ...` | Periódica (Agendada) |
 | **`cotacoes-agora`** | Executa a coleta de cotações dos **`ativos_codes`** **uma única vez**, ignorando o agendamento de horário e frequência. | `radar-fundamentos cotacoes <ativos> --saida ...` | Única (Bypass) |
-
+| **`indicadores <tipo>`** | Agenda a coleta de dados fundamentalistas no fundamentus.com.br (Ativos cadastrados na configuração) para ações ou fundos fechados (FIIs e Fiagros) | `radar-fundamentos indicadores tipo <ativos> --saida ... `|  Periódica (Agendada) |
+| **`indicadores-agora <tipo>`** | Executa coleta instantânea de dados fundamentalistas no fundamentus.com.br (Ativos cadastrados na configuração) para ações ou fundos fechados (FIIs e Fiagros) | `radar-fundamentos indicadores tipo <ativos> --saida ... `|  Única |
 #### Exemplos de Execução:
 
   * **Modo Periódico (Alta Frequência):**
@@ -72,7 +76,20 @@ radar-runner <COMANDO>
     # Coleta as cotações imediatamente, ignorando o horário atual.
     radar-runner cotacoes-agora
     ```
+    
+  * **Modo Indicadores (Execução Imediata):**
 
+    ```bash
+    # Coleta as cotações imediatamente, ignorando o horário atual.
+    radar-runner indicadores-agora acoes
+    ```
+    
+  * **Modo Indicadores (Agendado):**
+
+  ```bash
+  # Coleta as cotações imediatamente, ignorando o horário atual.
+  radar-runner indicadores fundos
+  ```
 -----
 
 ## ⚙️ Agendamento com systemd (modo usuário)
@@ -112,7 +129,8 @@ journalctl --user -u radar-runner-cotacoes.service -f
 
 ## 🧠 Observações
 
-  * **Tipos aceitos no modo `historico`:** `acao`, `fundo`.
+  * **Tipos aceitos no modo `historico`:** `acoes`, `fundos`.
+  * **Tipos aceitos no modo `indicadores`:** `acoes`, `fundos`.
   * **Binários:** Requer que o binário **`radar-fundamentos`** esteja no **PATH** (`~/.cargo/bin`).
   * **Uso:** Ideal para automações locais devido ao seu baixo consumo de recursos.
 
