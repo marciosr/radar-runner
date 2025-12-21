@@ -91,7 +91,7 @@ struct RunnerConfig {
 	fundo_codes: Vec<String>,
 }
 
-/// Retorna o caminho para o arquivo de configuração TOML: ~/.config/radar/radar-runner.conf
+/// Retorna o caminho para o arquivo de configuração TOML: ~/.config/radar/radar-runner.toml
 fn get_config_path() -> PathBuf {
 	let mut config_path = dirs::config_dir().unwrap_or_else(|| {
 		eprintln!(
