@@ -474,7 +474,7 @@ fn main() {
 					feriados,
 					config_inicio,
 					config_fim,
-					true,
+					false,
 				);
 				sleep(Duration::from_secs(frequencia_indicadores));
 			}
