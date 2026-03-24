@@ -257,7 +257,7 @@ fn executar_radar(
 	let (subcomando, argumento) = match comando {
 		Commands::Cotacoes => ("cotacoes", TipoAtivo::Geral),
 		Commands::Historico { tipo } => ("historico", tipo),
-		Commands::CotacoesAgora => ("cotacoes-agora", TipoAtivo::Geral),
+		Commands::CotacoesAgora => ("cotacoes", TipoAtivo::Geral),
 		Commands::Indicadores { tipo } => ("indicadores", tipo),
 		Commands::IndicadoresAgora { tipo } => ("indicadores", tipo),
 	};
